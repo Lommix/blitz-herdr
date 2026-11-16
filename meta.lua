@@ -1,0 +1,804 @@
+---Blitz Lua meta file
+---@meta
+---@class BlitzMcpServerDef
+---@field name string
+---stdio server executable; omit when url is set
+---@field command? string
+---remote server url (streamable http); omit when command is set
+---@field url? string
+---@field args? string[]
+---bearer token sent as Authorization header; ignored when key_envar resolves
+---@field key? string
+---env var holding the bearer token; preferred over key
+---@field key_envar? string
+---request timeout in seconds for url servers, 0 disables; default 300
+---@field timeout? number
+---@field tools_prefix? string
+---url servers only: authorize with OAuth through `/mcp connect <name>`; key and key_envar take precedence
+---@field oauth? boolean
+---pre-registered OAuth client id; skips dynamic client registration
+---@field client_id? string
+---OAuth client secret for a pre-registered confidential client
+---@field client_secret? string
+---OAuth scopes to request; default from the server challenge or metadata
+---@field scopes? string[]
+---loopback OAuth callback port; default 47823, ephemeral when busy
+---@field redirect_port? integer
+
+---@class BlitzMcp
+---Register an MCP server, stdio command or remote url. Disabled until explicitly enabled.
+---@field add fun(def: BlitzMcpServerDef): integer
+---Enable an MCP server for this session.
+---@field enable fun(mcp_id: integer)
+
+---@class BlitzJson
+---Encode a Lua value as JSON.
+---Supports nil, booleans, numbers, strings, and tables.
+---@field encode fun(obj: any): string|nil, boolean
+---Decode a JSON string into Lua values.
+---JSON arrays become 1-indexed Lua tables; objects become Lua tables; JSON null becomes nil.
+---@field decode fun(json: string): any, boolean
+
+---@class BlitzBase64
+---Encode a binary-safe Lua string as standard padded Base64.
+---@field encode fun(data: string): string|nil, boolean
+---Decode standard padded Base64 into a binary-safe Lua string.
+---@field decode fun(base64: string): string|nil, boolean
+
+---@class BlitzAskQuestion
+---very short label shown as a chip
+---@field header string
+---the question shown above the options
+---@field question string
+---1-8 option labels
+---@field options string[]
+---let the user toggle several options; needs at least two options and has no custom-message row; default false
+---@field multi_select? boolean
+---single-select only: show the trailing custom-message row; default true
+---@field allow_message? boolean
+
+---@class BlitzAskRequest
+---1-8 independent questions, answered in one widget
+---@field questions BlitzAskQuestion[]
+
+---@class BlitzAskPick
+---picked option text, or the custom message
+---@field text string
+---1-based option index; nil on a custom message
+---@field index? integer
+
+---@class BlitzCmd
+---Reset the active session.
+---@field reset_session fun(reset_usage?: boolean)
+---Change the working directory.
+---@field cd fun(path: string)
+---Cancel all in-flight agent work and drop streaming preview.
+---@field cancel fun()
+---Retry the main agent's last turn.
+---@field retry fun()
+---Compact the main agent now when idle, or before its next turn while running.
+---@field compact fun()
+---Push an entry into the timeline.
+---@field message_timeline fun(role: string, text: string)
+---Send a user message to the main agent (queued if running, restarted if idle), or start a general agent if none exists.
+---@field prompt fun(text: string)
+---Open the ask widget with up to 8 questions and return at once. The callback runs with one answer list per question when every question is resolved, and with nil when canceled. Each answer entry is a pick table with text and a 1-based index; a custom-message pick has no index. Single-select questions keep the custom-message row, multi_select questions toggle several options instead.
+---@field select fun(request: BlitzAskRequest, func: fun(answers: BlitzAskPick[][]|nil))
+---Attach a screenshot/image to the current input.
+---@field attach_screenshot fun(data: string, media_type?: string)
+
+---@class BlitzSpawnArgs
+---@field parent_id? integer
+---@field prompt string
+---@field agent_type? integer
+---working directory of the spawned agent; a relative path resolves against the parent agent cwd
+---@field cwd? string
+---run detached from the timeline: the agent never becomes the main agent and streams nothing into it; its final answer is queued to the parent as a system reminder, spilling to a file when oversized. Use with on_complete to build silent subagents
+---@field background? boolean
+---short task description shown in agent listings
+---@field task? string
+---bare agent: no system-reminder injections and no AGENTS.md context, so the blitz.hooks.inject hook never runs for it
+---@field clean? boolean
+---runs once on the main thread when the spawned agent completes after its children; status is AWAIT_COMPLETE, AWAIT_FAILED or AWAIT_CANCELED. Closing or replacing the agent first fires AWAIT_CANCELED. Read the answer with blitz.agent.result(agent_id). Main vm only, never call blitz.agent.await inside
+---@field on_complete? fun(agent_id: integer, status: integer)
+
+---@class BlitzHistoryRow
+---system, developer, user, agent or tool
+---@field role string
+---flattened parts; tool calls render as 'tool_call <name> <input>', tool results as 'tool_result <name>: <output>', reasoning parts are skipped
+---@field text string
+
+---@class BlitzAgent
+---Reserve a free slot and enqueue a spawn into it. Args take background to detach the agent from the timeline and on_complete, a one-shot main-thread callback for the end of the spawned run.
+---@field spawn fun(args: BlitzSpawnArgs): integer|nil
+---Queue a user message for the given agent.
+---@field message fun(agent_id: integer, text: string)
+---Block until the referenced agent reaches a terminal state.
+---@field await fun(agent_id: integer): integer
+---Return the awaited agent's last assistant text.
+---@field result fun(agent_id: integer): string|nil
+---Return the full message history of an agent as a list of BlitzHistoryRow.
+---@field history fun(agent_id: integer): BlitzHistoryRow[]
+---Return the agent history from the user prompt that started the current turn, as a list of BlitzHistoryRow. The checkpoint resets when the agent resets or its history is replaced: session load, rewind or compaction. A canceled run keeps the checkpoint: the next prompt after a cancel extends the same turn.
+---@field history_since_checkpoint fun(agent_id: integer): BlitzHistoryRow[]
+---Cancel the given agent. Returns 'Success' or 'Not Found'.
+---@field cancel fun(agent_id: integer): string
+---Cancel a finished or running agent and free its slot. History stays rendered. Returns 'Success' or 'Not Found'.
+---@field close fun(agent_id: integer): string
+---Return the model id the live agent currently runs on. Stays truthful while the agent type definition changes mid run.
+---@field get_model fun(agent_id: integer): string
+---Return the reasoning effort of the live agent as a tag string. Stays truthful while the agent type definition changes mid run.
+---@field get_effort fun(agent_id: integer): string
+---Replace the task description of a live agent, also mid run. The text shows in agent listings and permission payloads. A main agent starts with an empty task; a listener can set it after evaluating blitz.agent.get_prompt.
+---@field set_task_description fun(agent_id: integer, description: string)
+---Return the current task description of the agent. Empty when nothing was set.
+---@field get_task_description fun(agent_id: integer): string
+---Return the user prompt that started the agent's current turn. Set before agent_started fires; a retry or a cancel continuation keeps the prompt of the turn.
+---@field get_prompt fun(agent_id: integer): string
+
+---@class BlitzCmp
+---Select the next completion row, like <Tab>. No-op when the popup is closed.
+---@field next fun()
+---Select the previous completion row, like <C-p>. No-op when the popup is closed.
+---@field prev fun()
+---Insert the selected completion, like <C-y>. No-op when the popup is closed.
+---@field accept fun()
+
+---@class BlitzInput
+---Return the raw text of the input box. Reads the live buffer, so it
+---runs on the main thread only: config, commands, keybinds, and the
+---prompt hook. Tool and listener VMs and off-thread hooks such as
+---inject error. A pasted image shows as its embedded URL.
+---@field get fun(): string
+---Replace the input box text. The cursor moves to the end and the
+---completion popup re-syncs. The change is queued and lands on the next
+---main-loop pass. Safe from config, commands, tools, and listeners.
+---@field set fun(text: string)
+---Insert text at the cursor, like typed input. Follows the focused
+---field: prompt, permission message, or wizard text.
+---The change is queued and lands on the next main-loop pass. Safe
+---from config, commands, tools, and listeners.
+---@field append fun(text: string)
+---Recall the previous prompt from history into the input box, like
+---<S-Up>. No-op at the oldest entry, while an agent runs, or outside
+---text input.
+---@field history_prev fun()
+---Move one entry forward in prompt history, like <S-Down>. Past the
+---newest entry the box clears. No-op while an agent runs or outside
+---text input.
+---@field history_next fun()
+
+---@class BlitzWidgetBuf
+---visible widget width in cells, shrinks when clipped
+---@field width integer
+---visible widget height in cells, shrinks when clipped
+---@field height integer
+---write text at widget-relative coords, clipped to the widget rect, theme text color
+---@field set fun(x: integer, y: integer, text: string)
+---write text with a foreground color
+---@field set_color fun(x: integer, y: integer, text: string, color: string)
+---solid background fill
+---@field fill fun(x: integer, y: integer, w: integer, h: integer, color: string)
+---one cell thick background outline
+---@field rect fun(x: integer, y: integer, w: integer, h: integer, color: string)
+---unicode line border in foreground color
+---@field box fun(x: integer, y: integer, w: integer, h: integer, color: string)
+
+---@class BlitzSidebarDef
+---'left' (default) or 'right'
+---@field side? string
+---columns
+---@field width integer
+---draw callback, runs on every drawn frame
+---@field render fun(width: integer, height: integer, buf: BlitzWidgetBuf, frame: integer)
+
+---@class BlitzWidgetHandle
+---make the widget visible again
+---@field show fun()
+---hide the widget, its space returns to the layout
+---@field hide fun()
+---unregister the widget permanently
+---@field remove fun()
+---set width (sidebar) or height (panel) in cells
+---@field set_size fun(size: integer)
+
+---@class BlitzPanelDef
+---rows
+---@field height integer
+---'between' (default) pins the panel between timeline and input, 'below' pins it under the input
+---@field place? string
+---draw callback, runs on every drawn frame
+---@field render fun(width: integer, height: integer, buf: BlitzWidgetBuf, frame: integer)
+
+---@class BlitzDraw
+---Reserve a full height sidebar column and draw into it from Lua.
+---side is 'left' (default) or 'right', width is cells. A second add on
+---the same side replaces the first. The sidebar hides automatically
+---while the main column would drop below 40 columns. render runs on
+---every drawn frame with widget-relative dimensions, a BlitzWidgetBuf,
+---and the app frame counter (frame) for animations.
+---Colors are '#RRGGBB' hex or theme names (bg, muted, text, info, ...).
+---@field sidebar fun(def: BlitzSidebarDef): BlitzWidgetHandle
+---Reserve a horizontal panel and draw into it from Lua.
+---height is cells. Panels of the same place stack bottom up in
+---registration order, the first registered panel sits on top of its block.
+---place 'between' (default) pins the panel between timeline and input,
+---place 'below' pins it under the input widget. All panels hide
+---automatically while the timeline viewport would drop below 6 rows. render
+---runs on every drawn frame with widget-relative dimensions, a BlitzWidgetBuf,
+---and the app frame counter (frame) for animations.
+---@field panel fun(def: BlitzPanelDef): BlitzWidgetHandle
+---Request a UI redraw on the next loop tick. Call from animations to force frames while the app is idle.
+---@field redraw fun()
+
+---@class BlitzToolDef
+---execute bash scripts
+---@field BASH string
+---stop a background bash job
+---@field KILL_JOB string
+---read background bash job output
+---@field READ_JOB string
+---reading text files and images
+---@field READ string
+---write new files
+---@field WRITE string
+---default string replace edit
+---@field EDIT string
+---patch DSL tool. Replaces edit and write. GPT loves it
+---@field PATCH string
+---multiple choice questions for the user
+---@field ASK string
+---load a registered mcp tools into session
+---@field START_MCP string
+---search file contents with rg
+---@field GREP string
+---find files by name with fd
+---@field FIND string
+---list a directory
+---@field LS string
+
+---@class BlitzToolsetDef
+---bash with run_in_background, plus read_job and kill_job
+---@field BASH_BACKGROUND string[]
+---read only search: grep, find and ls
+---@field READONLY string[]
+
+---@class BlitzAgentCreatedEvent
+---packed AgentId of the new agent
+---@field id integer
+---agent type name
+---@field name string
+---nesting depth below the main agent
+---@field depth integer
+
+---@class BlitzAgentStartedEvent
+---packed AgentId of the agent
+---@field id integer
+---true on the first run after spawn, false when a queued message or agent result woke the agent
+---@field fresh boolean
+
+---@class BlitzAgentEvent
+---packed AgentId of the agent
+---@field id integer
+
+---@class BlitzAgentFailedEvent
+---packed AgentId of the failed agent
+---@field id integer
+---error name
+---@field err string
+
+---@class BlitzUserMessageEvent
+---prompt text as typed
+---@field text string
+
+---@class BlitzPermissionRequestEvent
+---hand to blitz.permissions.resolve, or blitz.permissions.get for the full BlitzPermissionSnapshot
+---@field ticket integer
+
+---@class BlitzInjectHook
+---run only for the main agent, default false
+---@field main_only? boolean
+---callback invoked on each agent step, returns the text to append
+---@field func fun(agent_id: integer, agent_type_id: integer): string
+---inject only when the returned text changes, default false
+---@field digest? boolean
+
+---@class BlitzPermissionPayload
+---packed AgentId of the requesting agent
+---@field agent_id integer
+---@field call_id? string
+---call|diff|ask
+---@field kind string
+---tool name
+---@field tool string
+---raw JSON arguments of the tool call
+---@field tool_input string
+---requesting agent type name
+---@field agent_name string
+---requesting agent type description
+---@field agent_description string
+---task set at spawn, empty on a prompted main agent
+---@field agent_task string
+---requesting agent working directory
+---@field agent_cwd string
+---kind == call
+---@field description? string
+---kind == diff
+---@field path? string
+---kind == ask
+---@field questions? BlitzAskQuestion[]
+
+---@class BlitzPermissionDecision
+---false denies, true approves; on ask without answers this picks the recommended options
+---@field approved boolean
+---deny reason, reaches the model as tool error
+---@field msg? string
+---ask payloads only: one pick list per question; a pick carries a 1-based index or text as a custom message. A missing question entry falls back to its recommendation
+---@field answers? BlitzAskPick[][]
+
+---@class BlitzHooks
+---Register a listener for after the active session is reset. Takes no payload. The listener runs in a sandbox Lua VM on a background thread. Cannot mutate lua state. Use `blitz.state.set/get`
+---@field session_reset fun(func: fun())
+---Register a listener for after an agent slot is activated. The listener runs in a sandbox Lua VM on a background thread. Cannot mutate lua state. Use `blitz.state.set/get`
+---@field agent_created fun(func: fun(ev: BlitzAgentCreatedEvent))
+---Register a listener for when an agent starts running; fires on spawn and on every wake-up. The listener runs in a sandbox Lua VM on a background thread. Cannot mutate lua state. Use `blitz.state.set/get`
+---@field agent_started fun(func: fun(ev: BlitzAgentStartedEvent))
+---Register a listener for when an agent completes. The listener runs in a sandbox Lua VM on a background thread. Cannot mutate lua state. Use `blitz.state.set/get`
+---@field agent_complete fun(func: fun(ev: BlitzAgentEvent))
+---Register a listener for when an agent run fails. The listener runs in a sandbox Lua VM on a background thread. Cannot mutate lua state. Use `blitz.state.set/get`
+---@field agent_failed fun(func: fun(ev: BlitzAgentFailedEvent))
+---Register a listener for when an agent is cancelled. The listener runs in a sandbox Lua VM on a background thread. Cannot mutate lua state. Use `blitz.state.set/get`
+---@field agent_cancelled fun(func: fun(ev: BlitzAgentEvent))
+---Register a listener for when chat compaction starts. The listener runs in a sandbox Lua VM on a background thread. Cannot mutate lua state. Use `blitz.state.set/get`
+---@field compaction_started fun(func: fun(ev: BlitzAgentEvent))
+---Register a listener for when chat compaction completes. The listener runs in a sandbox Lua VM on a background thread. Cannot mutate lua state. Use `blitz.state.set/get`
+---@field compaction_complete fun(func: fun(ev: BlitzAgentEvent))
+---Register a listener for after the user sends a message. The listener runs in a sandbox Lua VM on a background thread. Cannot mutate lua state. Use `blitz.state.set/get`
+---@field user_message_sent fun(func: fun(ev: BlitzUserMessageEvent))
+---Register a listener for after MCP tools are reloaded. Takes no payload. The listener runs in a sandbox Lua VM on a background thread. Cannot mutate lua state. Use `blitz.state.set/get`
+---@field mcp_tools_reloaded fun(func: fun())
+---Register a listener for every tool approval, before the
+---approval-mode check: a listener can deny what default mode would
+---auto-approve. The event carries the ticket; fetch details with
+---blitz.permissions.get and decide with blitz.permissions.resolve.
+---blitz.get_flags().approval_mode reads the current mode inside a
+---listener. Mode auto-approval and the TUI wait until every
+---listener finished; unresolved tickets then fall back to the
+---mode check and the TUI.The listener runs in a sandbox Lua VM on a background thread. Cannot mutate lua state. Use `blitz.state.set/get`
+---@field permission_requested fun(func: fun(ev: BlitzPermissionRequestEvent))
+---Register a callback that runs on every TUI loop iteration:
+---at least every 16 ms while idle, more often during input.
+---It is not a fixed rate; throttle on your own clock. Each
+---call adds a callback; all run in registration order in the
+---main Lua VM on the main thread. An iteration is skipped
+---while another thread holds the main VM. A callback that
+---errors is unregistered. Keep it short and call
+---blitz.draw.redraw() when the visuals change. A reload clears
+---every callback. Never call blitz.agent.await inside it.
+---@field tick fun(func: fun())
+---Register a callback that runs when the main agent's state
+---changes. It receives the new state, the same label as
+---BlitzAgentRow.state, or "" when there is no main agent.
+---Changes are sampled once per loop iteration, so states
+---shorter than that are coalesced. Each call adds a callback;
+---all run in registration order in the main Lua VM on the
+---main thread. A callback that errors is unregistered. A
+---reload clears every callback and reports the current state
+---again. Never call blitz.agent.await inside it.
+---@field state_changed fun(func: fun(state: string))
+---Install one system-reminder injection listener. Takes one
+---BlitzInjectHook table. func runs for every agent step before
+---the reminder is built, in the main Lua VM on the calling
+---thread. Return a string to append it to the agent's
+---<system-reminder> block, nil for nothing. main_only limits
+---func to the main agent. digest suppresses the text while it
+---matches the last text this listener returned. Listeners run
+---in registration order. Never call blitz.agent.await inside
+---the hook. Clean agents get no reminder at all, so the hook
+---never runs for them.
+---@field inject fun(hook: BlitzInjectHook)
+---Install the typed-input hook. Runs on every Enter press with
+---text, in the main Lua VM on the main thread, before command
+---and skill dispatch. Return a string to replace the input, nil
+---to send it unchanged. Last registration wins. Never call
+---blitz.agent.await inside the hook.
+---@field prompt fun(hook: fun(text: string): string)
+---Install the permission hook. Runs on every tool approval request
+---before the approval-mode check, in the main Lua VM on the main
+---thread. Return a BlitzPermissionDecision table, or nil for the
+---normal flow. Last registration wins. Never call
+---blitz.agent.await inside the hook.
+---@field approve fun(hook: fun(payload: BlitzPermissionPayload): BlitzPermissionDecision)
+---Remove the approve, inject, prompt, tick, and state_changed hooks.
+---@field clear fun()
+
+---@class BlitzPermissionSnapshot
+---hand to blitz.permissions.resolve
+---@field ticket integer
+---packed AgentId of the requesting agent
+---@field agent_id integer
+---@field call_id? string
+---call|diff|ask
+---@field kind string
+---tool name
+---@field tool string
+---raw JSON arguments of the tool call
+---@field tool_input string
+---requesting agent type name
+---@field agent_name string
+---requesting agent type description
+---@field agent_description string
+---task set at spawn, empty on a prompted main agent
+---@field agent_task string
+---requesting agent working directory
+---@field agent_cwd string
+---kind == call
+---@field description? string
+---kind == diff
+---@field path? string
+---kind == ask
+---@field questions? BlitzAskQuestion[]
+
+---@class BlitzPermissions
+---Snapshot every parked approval request as a list of BlitzPermissionSnapshot.
+---@field list_pending fun(): BlitzPermissionSnapshot[]
+---Snapshot one parked approval request by ticket as a BlitzPermissionSnapshot, or nil when the ticket is unknown or already resolved.
+---@field get fun(ticket: integer): BlitzPermissionSnapshot|nil
+---Decide a parked approval request: true when the ticket resolved, false when unknown or already gone. Takes the same BlitzPermissionDecision table as the approve hook. Requests of dead agents deny regardless.
+---@field resolve fun(ticket: integer, decision: BlitzPermissionDecision): boolean
+
+---@class BlitzArgDef
+---@field type string
+---@field description string
+---@field required? boolean
+
+---@class BlitzCtx
+---Working directory for tool file operations.
+---@field cwd string
+---@field agent_id integer
+---@field state table
+---Set the tool status text. May contain ANSI SGR escape codes for styling, and newlines for multiple lines.
+---@field set_status fun(self: BlitzCtx, msg: string)
+---@field set_child_id fun(self: BlitzCtx, agent_id: integer)
+---@field approve fun(self: BlitzCtx, description: string): integer, string|nil
+---Ask the user up to 8 independent multiple-choice questions in one request. Returns REQ_STATUS_CHOICE and one pick list per question, or REQ_STATUS_DENIED and nil when canceled. Each pick carries text and a 1-based index; a custom message pick has no index.
+---@field ask fun(self: BlitzCtx, request: BlitzAskRequest): integer, BlitzAskPick[][]|nil
+---Run one tool of this agent. Returns the tool result text. When it exceeds 32KB or 2000 lines, the tail is kept, the full text spills to a file, and the locator is appended. Returns the nested error text on failure. Rejects nested codemode.
+---@field call fun(self: BlitzCtx, name: string, args: table): string
+---Run an array of { name, args } requests in parallel, at most 8 concurrent. Returns one tail-capped result text per request, in input order. A failed item does not abort the batch.
+---@field batch fun(self: BlitzCtx, requests: table): string[]
+
+---@class BlitzCall
+---@field id string
+---@field name string
+---@field arguments table
+
+---@class BlitzToolResult
+---Tool result text. Above 32KB or 2000 lines the tail is kept and the full text spills to a file with a locator.
+---@field msg? string
+---{ media_type = string, data = string }; data is base64, decoded size capped at 4MB
+---@field img? table
+---@field exit_loop? boolean
+
+---@class ToolDef
+---@field name string
+---@field description string
+---@field schema? string
+---@field args? table<string, BlitzArgDef>
+---@field snippet? string
+---@field guidelines? string
+---only offer the tool to agents whose model has vision
+---@field requires_vision? boolean
+---@field func fun(ctx: BlitzCtx, call: BlitzCall): BlitzToolResult
+
+---@class BlitzAgentRow
+---packed agent id
+---@field agent_id integer
+---agent type name
+---@field name string
+---task description set at spawn time
+---@field task string
+---running|thinking|writing|calling|processing|retrying|compacting|waiting|idle|complete|canceled|failed
+---@field state string
+---context fill in percent
+---@field ctx integer
+---tokens used in the context window
+---@field context_tokens integer
+---context window size in tokens
+---@field context_limit integer
+---model id the agent runs on
+---@field model string
+---true when this is the main agent
+---@field main boolean
+---true when the agent runs detached from the timeline
+---@field background boolean
+---parent agent id, nil on roots
+---@field parent integer|nil
+---agent depth (0 = main)
+---@field depth integer
+---output tokens per second, live while a run streams
+---@field tps number
+---messages waiting in the agent queue
+---@field queued integer
+---unix epoch milliseconds of the last provider request, 0 if none
+---@field last_active integer
+
+---@class BlitzAgentTypeRow
+---type handle for blitz.agent.spawn
+---@field agent_type integer
+---value the agent tool takes as agent_type
+---@field name string
+---@field description string
+---false keeps the type out of the agent tool list
+---@field in_agent_tool boolean
+
+---@class BlitzProviderDef
+---'openai' | 'response' | 'anthropic'
+---@field type string
+---the endpoint url
+---@field url string
+---the ENVAR holding the api key (not the key itself!)
+---@field key_envar? string
+---stored api key; the envar wins when both are set
+---@field key? string
+---header name for the session cache key; empty = disabled
+---@field session_key_header? string
+---requests per minute; 0 = unlimited
+---@field rate_limit? integer
+
+---@class BlitzThinking
+---@field type string
+---@field budget_tokens? integer
+
+---@class BlitzModelCost
+---price per 1M input tokens
+---@field input number
+---price per 1M output tokens
+---@field output number
+---price per 1M cache-read tokens
+---@field cache number
+
+---@class BlitzModelDef
+---the API model id
+---@field name string
+---provider handle from add_provider
+---@field provider integer
+---model supports images
+---@field vision? boolean
+---replay reasoning text as reasoning_content (deepseek/glm style); defaults true, set false to opt out
+---@field replay_reasoning? boolean
+---model accepts the agent reasoning effort; defaults true, set false to opt out
+---@field reasoning? boolean
+---@field temperature? number
+---@field max_tokens? integer
+---@field max_completion_tokens? integer
+---@field max_output_tokens? integer
+---@field top_p? number
+---@field top_k? integer
+---@field frequency_penalty? number
+---@field presence_penalty? number
+---@field enable_thinking? boolean
+---@field thinking? BlitzThinking
+---price per 1M tokens; absent = free
+---@field cost? BlitzModelCost
+
+---@class BlitzSkillFilter
+---skill names this agent may load; empty means all
+---@field only? string[]
+---skill names this agent may not load; wins over only
+---@field except? string[]
+
+---@class BlitzAgentDef
+---@field name string
+---@field description string
+---@field prompt string
+---tool names and toolsets
+---@field tools (string|string[])[]
+---model handle from add_model
+---@field model? integer
+---@field effort? string
+---@field in_agent_tool? boolean
+---false disables all skills for this agent; a table restricts the catalogue and skill reads
+---@field skills? boolean|BlitzSkillFilter
+
+---@class BlitzTokenUsage
+---@field input integer
+---@field output integer
+---@field cache integer
+---@field cache_creation integer
+---total lifetime cost in USD
+---@field cost number
+
+---@class BlitzCapabilityRule
+---binary resolved on PATH
+---@field binary string
+---prompt line added when the binary exists
+---@field rule string
+
+---@class BlitzAppFlags
+---@field show_thinking? boolean
+---@field show_diffs? boolean
+---@field inline_images? boolean
+---@field notify_on_reload? boolean
+---@field debug_log? boolean
+---strict|default
+---@field approval_mode? string
+
+---@class BlitzTheme
+---@field bg? string
+---@field overlay_dark? string
+---@field overlay? string
+---@field border? string
+---@field muted? string
+---@field text? string
+---@field text_hl? string
+---@field ok? string
+---@field info? string
+---@field warn? string
+---@field err? string
+---@field on_err? string
+---@field diff_surface? string
+---@field diff_add? string
+---@field diff_remove? string
+---@field role_user? string
+---@field role_agent? string
+---@field role_system? string
+
+---@class BlitzShellOpts
+---the shell command to run
+---@field cmd string
+---kill the command after this many seconds
+---@field timeout? number
+
+---@class BlitzState
+---Set a value in the shared state. Pass nil to delete the key.
+---Returns true on success, or nil,false on a non-string key or unsupported value type.
+---Tables must have a contiguous 1..n array part and string-only keys.
+---@field set fun(key: string, value: any)
+---Get a value from the shared state. Returns nil if the key is missing,
+---or nil,false on a non-string key.
+---@field get fun(key: string)
+
+---@class BlitzPluginSpec
+---Full git URL. Exclusive with path. Global config only.
+---@field url? string
+---Local plugin directory. `~` expands; a relative path resolves from the declaring blitz.lua.
+---@field path? string
+---Branch, tag, or full commit SHA. A branch or no ref floats; a tag or commit pins.
+---@field ref? string
+---Reserved and ignored.
+---@field lazy? boolean
+
+---@class BlitzPluginHandle
+---@field name string
+---Canonical plugin root.
+---@field dir string
+---Git URL; nil for a path plugin.
+---@field source string|nil
+---@field ref string|nil
+---Resolved commit of a loaded git plugin.
+---@field commit string|nil
+---Local path of a path plugin.
+---@field path string|nil
+---Installed and on the module path; `require(name)` resolves.
+---@field available boolean
+---@field error string|nil
+
+---@class BlitzPlugins
+---Plugin handles in declaration order, including failed and disabled ones.
+---@field list fun(): BlitzPluginHandle[]
+---Plugin handle by name, case-insensitive.
+---@field get fun(name: string): BlitzPluginHandle|nil
+
+---@class Blitz
+---@field mcp BlitzMcp
+---@field json BlitzJson
+---@field base64 BlitzBase64
+---@field cmd BlitzCmd
+---@field agent BlitzAgent
+---@field cmp BlitzCmp
+---@field input BlitzInput
+---@field draw BlitzDraw
+---@field tools BlitzToolDef
+---@field toolsets BlitzToolsetDef
+---@field hooks BlitzHooks
+---@field permissions BlitzPermissions
+---@field AGENT_GENERAL integer
+---@field REQ_STATUS_PENDING integer
+---@field REQ_STATUS_APPROVED integer
+---@field REQ_STATUS_DENIED integer
+---@field REQ_STATUS_CHOICE integer
+---@field REQ_STATUS_MESSAGE integer
+---@field AWAIT_COMPLETE integer
+---@field AWAIT_FAILED integer
+---@field AWAIT_CANCELED integer
+---@field AWAIT_INVALID integer
+---Register a tool.
+---@field register_tool fun(def: ToolDef): string
+---Add a tool or a toolset from the tool pool to an agent type's tool set.
+---@field add_tool fun(agent_type: integer, tool: string|string[])
+---Return the main agent, if a session is running.
+---@field get_main_agent fun(): integer|nil
+---Return the id of the recorded session, or nil until its journal holds a first record.
+---@field get_session_id fun(): string|nil
+---Write a recorded session of this project as a JSON transcript to path, like `blitz eval`. Takes a session id or a unique prefix; a relative path resolves against the launch directory. The journal flushes at checkpoints, so the running step of a live session can be missing.
+---@field export_transcript fun(session_id: string, path: string)
+---Snapshot every occupied agent slot, running and finished, as a list of BlitzAgentRow.
+---@field list_agents fun(): BlitzAgentRow[]
+---Snapshot every configured agent type as a list of BlitzAgentTypeRow, in slot order. Safe in tool vms while the config loads; agent types only change on reload.
+---@field list_agent_types fun(): BlitzAgentTypeRow[]
+---Return true when the tool is in the effective tool set of an agent type. Counts listed tools and tools added to every agent.
+---@field has_tool fun(agent_type: integer, tool: string): boolean
+---Exit the agent loop with a message.
+---@field exit_loop fun(content?: string): BlitzToolResult
+---Register a provider.
+---@field add_provider fun(def: BlitzProviderDef): integer
+---Register a model with provider, vision capability and cost.
+---@field add_model fun(def: BlitzModelDef): integer
+---Register a complete agent configuration and return its agent type handle. In a tool or listener vm the call cannot register: it resolves the name against the live registry and returns the existing handle, or 0 when the name is unknown.
+---@field add_agent fun(def: BlitzAgentDef): integer
+---Set the model config for a specific agent.
+---@field set_agent_model fun(agent_type: integer, model: integer, force?: boolean)
+---Set the reasoning effort for an agent type without touching its model.
+---@field set_agent_effort fun(agent_type: integer, effort: string, force?: boolean)
+---Return the model name bound to an agent type.
+---@field get_model_name fun(agent_type: integer): string
+---Return the reasoning effort string bound to an agent type.
+---@field get_agent_effort fun(agent_type: integer): string
+---Return token usage currently shown by the statusbar.
+---@field token_usage fun(): BlitzTokenUsage
+---Return main-agent context fill percentage currently shown by the statusbar.
+---@field context_percent fun(): number
+---Set the default context edge, in tokens, used for statusbar percentage and auto-compaction.
+---@field set_compact_edge fun(tokens: integer)
+---Set the maximum width and height, in pixels, for images returned by the read tool. Larger images are scaled down. 0 disables the limit for that axis. Default 2048x2048.
+---@field set_read_image_max fun(width: integer, height: integer)
+---Bind a vim-style key combo to a Lua callback.
+---Examples: "<C-c>", "<M-S-a>", "<Esc>", "<Up>", "<F1>", "a"
+---
+---@field bind fun(key: string, func: fun(), description?: string)
+---Bind a slash command to a Lua callback. The leading "/" is added automatically.
+---The callback always receives one string: the remaining input after the
+---command name, empty when none. Always declare the parameter.
+---Example: blitz.add_command("help", function(rem) end)
+---
+---@field add_command fun(command: string, func: fun(rem: string), description?: string)
+---Override the tool set for a given agent type. Replaces defaults entirely.
+---Names must match built-in tool names or names of tools registered via blitz.register_tool.
+---Nested lists are toolsets and get flattened.
+---@field set_agent_tools fun(agent_type: integer, tool_names: (string|string[])[])
+---Restrict which skills an agent type can see and load. Pass false to
+---disable skills, or a table with optional only and except lists.
+---@field set_agent_skills fun(agent_type: integer, filter: boolean|BlitzSkillFilter)
+---Register environment capability rules. Each rule names a binary; when it
+---resolves through the exec pool, the rule line lands in the injected
+---env_capabilities catalogue of agents that own the bash tool. Binaries
+---resolve once before prompting.
+---@field set_capabilities fun(rules: BlitzCapabilityRule[])
+---Override the system prompt for a given agent type.
+---@field set_prompt fun(agent_type: integer, prompt: string)
+---Return the current app flags.
+---@field get_flags fun(): BlitzAppFlags
+---Set the app flags from a table. Fields you omit are left unchanged.
+---@field set_flags fun(flags: BlitzAppFlags)
+---Return the current theme as a table of hex color strings.
+---@field get_theme fun(): BlitzTheme
+---Set the theme from a table of hex color strings or "transparent". Missing fields keep their current value.
+---@field set_theme fun(theme: BlitzTheme)
+---Write a debug log line.
+---@field log fun(msg: string)
+---Execute a shell command. Returns output, ok.
+---@field shell fun(opts: BlitzShellOpts): any
+---Write content to a named file in the active session temp directory and return its path.
+---@field write_tempfile fun(name: string, content: string): string
+---Push a new popup notification with a lifetime of 8s to the top right corner.
+---@field push_notification fun(message: string)
+---@field state BlitzState
+---Declare a plugin, like Neovim's `vim.pack.add`: install and pin it and put its `lua/` dir on the module path. Runs no plugin code. Use it with `require(name)`, which raises with the reason when the plugin is not available.
+---@field plugin fun(name: string, spec: BlitzPluginSpec)
+---@field plugins BlitzPlugins
+---Override the status bar text. Return a string to display, or nil to keep the default.
+---@field status_bar_render fun(): string|nil
+
+---@type Blitz
+blitz = {}
